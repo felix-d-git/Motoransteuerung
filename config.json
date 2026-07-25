@@ -1,4 +1,10 @@
 {
+    "bild_ordner": "C:/Users/lelif/Downloads/testbilder",
+    "feld_groesse_mm": 20.0,
+    "pixel_mm": 0.0588,
+    "ziel_homogenitaet": 10.0,
+    "datei_endung": "*.png",
+    "rand_breite_untergrund": 5,
     "serieller_port": "COM9",
     "baudrate": 115200,
     "fenster_titel": "Motorsteuerung",
@@ -24,12 +30,6 @@
     "streuer_modus": 2,
     "kalibrierungsrichtung_x": -1,
     "kalibrierungsrichtung_y": 1,
-    "pixel_mm": 0.0588,
-    "ziel_homogenitaet": 10.0,
-    "datei_endung": "*.png",
-    "rand_breite_untergrund": 5,
-    "bild_ordner": "C:/Users/lelif/Downloads/testbilder",
-    "feld_groesse_mm": 20.0,
     "port": "COM9",
     "baud": 115200
 }

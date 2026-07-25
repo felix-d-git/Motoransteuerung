@@ -1,0 +1,33 @@
+{
+    "serieller_port": "COM9",
+    "baudrate": 115200,
+    "fenster_titel": "Motorsteuerung",
+    "geschwindigkeit_max": 28000,
+    "schritt_werte": [
+        -10,
+        -2,
+        -0.2,
+        -0.02,
+        -0.01,
+        0,
+        0.01,
+        0.02,
+        0.2,
+        2,
+        10
+    ],
+    "kalibrierungsgeschwindigkeit": 1000,
+    "kalibrierungs_bildpfad": "C:/Users/lelif/Dokumente/Laptop/Praxisphase/Bachlorarbeit/Python Program 10-Git/dist/Motoransteuerung",
+    "mm_pro_prozent_zweiring": 0.0582,
+    "mm_pro_prozent_vierring": 0.1104,
+    "sym_toleranz_prozent": 0.2,
+    "streuer_modus": 4,
+    "kalibrierungsrichtung_x": -1,
+    "kalibrierungsrichtung_y": 1,
+    "pixel_mm": 0.0588,
+    "ziel_homogenitaet": 10.0,
+    "datei_endung": "*.png",
+    "rand_breite_untergrund": 5,
+    "bild_ordner": "C:/Users/lelif/Dokumente/Laptop/Praxisphase/Bachlorarbeit/Python Program 10-Git/dist/Motoransteuerung/data",
+    "feld_groesse_mm": 20.0
+}
