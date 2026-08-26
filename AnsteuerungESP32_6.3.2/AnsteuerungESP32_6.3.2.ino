@@ -8,12 +8,12 @@
 
 
 // KONFIGURATION 1/8-Stepp
-constexpr float  MAX_SPEED      = 28000.0f;//7000.0f;
+constexpr float  MAX_SPEED      = 28000.0f;
 constexpr float  BESCHLEUNIGUNG   = 20000.0f;
 constexpr int    MIN_SPEED      = 300;
 constexpr int    BAUD_RATE      = 115200;
-constexpr double MM_PER_STEP    = 0.0000028858; //28697; //0.0000114789;
-constexpr long   Overshoot_STEPS = 8700*4;
+constexpr double MM_PER_STEP    = 0.0000028858; 
+constexpr long   Overshoot_STEPS = 8700*4;   // angenommenes Getriebespiel
 
 
 // PINS
@@ -26,17 +26,11 @@ constexpr int S_OBEN_PINS[4] = {16, 36, 35, 34};
 
 // GLOBALE INSTANZEN
 struct Axis {
-    // Positionsverfolgung
-    long   logZiel     = 0;
-    // Betriebs-Modus
-    int    speedMode     = 0;   // 0 = Positions-Modus, !=0 = Speed-Modus
-    // Gegenfahrt-Status
-    bool   gegenfahrt_ausstehend  = false;
-    // Puffer: Befehl der während Gegenfahrt- ankam
-    bool   gegenfahrt_aktiv    = false;
-    double gegenfahrt_mm        = 0.0;
-    // Stopp-Synchronisation
-    bool   gegenfahrt_stop      = false;
+    long logZiel   = 0;                // Soll-Position in Schritten
+    int  speedMode = 0;                // 0 = Positions-Modus, !=0 = Speed-Modus
+    long spiel     = Overshoot_STEPS;  // Spiel nach oben gefasst (0..Overshoot_STEPS)
+    long letztePos = 0;                // fuer die Spiel-Mitzaehlung
+    bool slpAn     = false;            // Treiber bestromt? (nur bei Wechsel schalten)
 };
 
 BasicStepper *mot[4];
@@ -56,78 +50,53 @@ unsigned long letzterStatus = 0;
 
 
 
-// Harter Stopp: Soll = Ist, damit AccelStepper distanceToGo == 0 hat.
-void stopMotor(int i, const char *reason) {
-    mot[i]->stop();
-    mot[i]->moveTo(mot[i]->currentPosition());
-    ax[i].speedMode    = 0;
-    ax[i].gegenfahrt_stop     = true;
-    ax[i].gegenfahrt_ausstehend = false;
-    Serial.printf("STOP_Motor_%d%s\n", i + 1, reason);
+// Spielausgleich: logZiel wird immer von unten angefahren.
+long fahrZiel(long logZiel, long ist, long spiel) {
+    if (logZiel < ist)                                  return logZiel - Overshoot_STEPS; // Ziel drunter -> untergreifen
+    if (spiel + (logZiel - ist) < Overshoot_STEPS)      return logZiel - Overshoot_STEPS; // Auflauf zu kurz -> untergreifen
+    return logZiel;                                                                       // Spiel gefasst -> direkt hoch
 }
 
-// Fährt zur absoluten Schritt-Position (kein Gegenfahrt-Status hier).
-void FahrZuZiel(int i, long target) {
+// Ziel neu setzen; jederzeit waehrend der Fahrt aufrufbar (zieht nach).
+void FahrZuZiel(int i) {
     mot[i]->setMaxSpeed(MAX_SPEED);
-    mot[i]->moveTo(target);
+    mot[i]->moveTo(fahrZiel(ax[i].logZiel, mot[i]->currentPosition(), ax[i].spiel));
+}
+
+// Harter Stopp: setCurrentPosition nullt _speed/_stepInterval/_n -> Pulse sofort aus.
+void stopMotor(int i, const char *reason) {
+    mot[i]->setCurrentPosition(mot[i]->currentPosition());
+    ax[i].speedMode = 0;
+    ax[i].logZiel   = mot[i]->currentPosition();
+    Serial.printf("STOP_Motor_%d%s\n", i + 1, reason);
+    Serial.printf("SYNC_Motor_%d_Pos_gesetzt\n", i + 1);
 }
 
 
 // — ENDSCHALTER
 void checkeEndschalter(int i) {
-    if (ax[i].gegenfahrt_stop) return;   // ← Stopp läuft bereits
-
     float spd = mot[i]->speed();
     if      (spd > 0 && digitalRead(S_OBEN_PINS[i]) == HIGH) stopMotor(i, ":Anschlag_Oben");
     else if (spd < 0 && digitalRead(S_UNTEN_PINS[i]) == HIGH) stopMotor(i, ":Anschlag_Unten");
 }
 
 
-// — Gegenfahrt-Status-KOMPENSATION
-
-// Startet eine Gegenfahrt-Status-Fahrt: erst 8700 Schritte über Ziel hinaus,
-// dann zurück auf logZiel (wird in processGegenfahrt-Status erledigt).
-void startfahrtmitOvershoot(int i) {
-    ax[i].gegenfahrt_ausstehend = true;
-    FahrZuZiel(i, ax[i].logZiel - Overshoot_STEPS);
-}
-
-// Wird aus dem Loop aufgerufen wenn distanceToGo == 0 und gegenfahrt_ausstehend gesetzt.
-void finishGegenfahrt(int i) {
-    ax[i].gegenfahrt_ausstehend = false;
-    FahrZuZiel(i, ax[i].logZiel);
-}
-
-
 // — BEFEHLS-VERARBEITUNG
-
-
-// Relativer Positions-Befehl in mm.
+// Relativer Positions-Befehl in mm. Kein Puffer, Ziel wird sofort nachgezogen.
 void Step(int i, double mm) {
+    bool inFahrt = (mot[i]->distanceToGo() != 0);
+
     ax[i].speedMode = 0;
+    ax[i].logZiel  += lround(mm / MM_PER_STEP);
+    FahrZuZiel(i);
 
-    // Befehl kam während laufender Gegenfahrt-Status-Fahrt → puffern
-    if (ax[i].gegenfahrt_ausstehend) {
-        ax[i].gegenfahrt_mm    += mm;
-        ax[i].gegenfahrt_aktiv = true;
-        Serial.printf("PUFFER_Motor_%d_warte_auf_Gegenfahrt-Status\n", i + 1);
-        return;
-    }
-
-    ax[i].logZiel += mm / MM_PER_STEP;
-
-    if (mm < 0) {
-        startfahrtmitOvershoot(i);
-    } else {
-        FahrZuZiel(i, ax[i].logZiel);
-    }
+    if (inFahrt) Serial.printf("NACHZIEHEN_Motor_%d_Ziel_erweitert\n", i + 1);
 }
 
 // Kontinuierliche Fahrt mit Schritt/s.
 void Speed(int i, int s) {
-    ax[i].speedMode     = s;
-    ax[i].gegenfahrt_ausstehend  = false;
-    ax[i].logZiel     = mot[i]->currentPosition();
+    ax[i].speedMode = s;
+    ax[i].logZiel   = mot[i]->currentPosition();
 
     if (s == 0) { stopMotor(i, ":Befehl_0"); return; }
 
@@ -185,58 +154,35 @@ void sendeStatus() {
 // — LOOP-LOGIK PRO ACHSE
 
 
-// Stopp-Synchronisation: logZiel nach vollständigem Stillstand setzen.
-void SynchronisationStop(int i) {
-    if (!ax[i].gegenfahrt_stop) return;
-    if (mot[i]->speed() != 0 || mot[i]->distanceToGo() != 0) return;
-
-    ax[i].gegenfahrt_stop      = false;
-    ax[i].logZiel     = mot[i]->currentPosition();
-    Serial.printf("SYNC_Motor_%d_Pos_gesetzt\n", i + 1);
-}
-
-// Gegenfahrt-Status-Abschluss und gepufferten Befehl ausführen.
-void processGegenfahrt(int i) {
-    if (ax[i].speedMode != 0)        return;   // nur im Positions-Modus
-    if (mot[i]->distanceToGo() != 0) return;   // noch in Fahrt
-
-    if (ax[i].gegenfahrt_ausstehend) {
-        finishGegenfahrt(i);
-        return;
-    }
-
-    if (ax[i].gegenfahrt_aktiv) {
-        double mm        = ax[i].gegenfahrt_mm;
-        ax[i].gegenfahrt_mm     = 0.0;
-        ax[i].gegenfahrt_aktiv = false;
-
-        ax[i].logZiel += mm / MM_PER_STEP;
-
-        if (mm < 0) {
-            startfahrtmitOvershoot(i);
-        } else {
-            FahrZuZiel(i, ax[i].logZiel);
-        }
-        Serial.printf("PUFFER_Motor_%d_ausgefuehrt\n", i + 1);
-    }
-}
-
 void processAxis(int i) {
     static bool warInBewegung[4] = {false, false, false, false};
+
     mot[i]->run();
-    SynchronisationStop(i);
-    processGegenfahrt(i);
+    long pos = mot[i]->currentPosition();
+
+    long s = ax[i].spiel + (pos - ax[i].letztePos);       // hoch fasst, runter gibt frei
+    ax[i].letztePos = pos;
+    ax[i].spiel = constrain(s, 0L, Overshoot_STEPS);
+
     if (mot[i]->speed() != 0) checkeEndschalter(i);
-    // Bedingung: Motor steht (speed 0) und keine Gegenfahrt ausstehend/aktiv
-    if (mot[i]->distanceToGo() == 0 && !ax[i].gegenfahrt_ausstehend && !ax[i].gegenfahrt_aktiv) {
-        // Hier sicherstellen, dass wir nicht bei jedem Loop-Durchlauf spammen:
+
+    if (ax[i].speedMode == 0 && mot[i]->distanceToGo() == 0 && pos != ax[i].logZiel)
+        FahrZuZiel(i);                                    // Untergriff erreicht -> auflaufen
+
+    if (mot[i]->distanceToGo() == 0 && pos == ax[i].logZiel) {
         if (warInBewegung[i]) {
             Serial.printf("INFO_Motor_%d_Fahrt_abgeschlossen\n", i + 1);
             warInBewegung[i] = false;
         }
-    } else {
-        // Wenn er sich bewegt, setzen wir den Flag
-        if (mot[i]->distanceToGo() != 0) warInBewegung[i] = true;
+    } else if (mot[i]->distanceToGo() != 0) {
+        warInBewegung[i] = true;
+    }
+
+    // Haltestrom nur waehrend der Fahrt (isRunning = speed!=0 oder Ziel noch nicht erreicht)
+    bool laeuft = mot[i]->isRunning();
+    if (laeuft != ax[i].slpAn) {
+        digitalWrite(SLP_PINS[i], laeuft ? HIGH : LOW);
+        ax[i].slpAn = laeuft;
     }
 }
 
@@ -257,7 +203,7 @@ void setup() {
         pinMode(S_UNTEN_PINS[i], INPUT);
         pinMode(S_OBEN_PINS[i], INPUT);
         pinMode(SLP_PINS[i], OUTPUT);
-        digitalWrite(SLP_PINS[i], HIGH);  // permanenter Haltestrom
+        digitalWrite(SLP_PINS[i], LOW);   // Haltestrom aus, wird je Fahrt geweckt
     }
     Serial.println("SYSTEM BEREIT");
 }
