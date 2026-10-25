@@ -1,0 +1,16 @@
+# Standard A (.claude/bin/standard-a.py): Security-Updates sofort, Rest wöchentlich gebündelt.
+# Majors ignoriert -> kommen über check-majors.py in die Coding-Sitzung.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      patch-minor:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
